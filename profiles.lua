@@ -506,7 +506,7 @@ end
 local helper_key_id = 1011
 local email_key_id = 314
 
-local function get_helpers(user_id, helpers_string)
+local function get_helpers(helpers_string)
     if (helpers_string:len() - 1) % 4 ~= 0 then
         return nil, "Bad size of helpers"
     end
@@ -551,7 +551,7 @@ function profile_print_with_helper(helper_number)
 
             if p.prefs[packed_key_id] then
                 if p.prefs[packed_key_id]:len() > 1 then
-                    local helpers, err = get_helpers(profile_id_to_int(p.id), p.prefs[packed_key_id])
+                    local helpers, err = get_helpers(p.prefs[packed_key_id])
 
                     if helpers then
                         if helpers[helper_number] then
