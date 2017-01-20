@@ -502,3 +502,69 @@ function profile_print_bigger_than(size_in_bytes)
         end
     end
 end
+
+local helper_key_id = 1011
+local email_key_id = 314
+
+local function get_helpers(user_id, helpers_string)
+    if (helpers_string:len() - 1) % 4 ~= 0 then
+        return nil, "Bad size of helpers"
+    end
+
+    local helpers = {}
+    local i = 1
+    while i < helpers_string:len() do
+        local index = box.unpack('i', string.sub(helpers_string, i, i + 3))
+        local state = bit.band(index, 0x80000000)
+        index = bit.band(index, 0x7FFFFFFF)
+        i = i + 4
+
+        local time = box.unpack('i', string.sub(helpers_string, i, i + 3))
+        i = i + 4
+        
+        local show = box.unpack('i', string.sub(helpers_string, i, i + 3))
+        i = i + 4
+        
+        local close = box.unpack('i', string.sub(helpers_string, i, i + 3))
+        i = i + 4
+
+        local helper = {index = index, state = state, time = time, show = show, close = close}
+        
+        helpers[index] = helper
+    end
+
+    if string.sub(helpers_string, i, i+1) ~= '!' then
+        return nil, "Non '!' end of helpers, invalid helpers"
+    end
+    
+    return helpers, nil
+end
+
+function profile_print_with_helper(helper_number)
+    if box.cfg.replication_source == nil then error("replica api only") end
+    if type(helper_number) == "string" then helper_number = tonumber(helper_number) end
+    
+    profile_apply_func(
+        function(p, helper_number)
+            local packed_key_id = box.pack("w", helper_key_id)
+            local packed_email_key_id = box.pack("w", email_key_id)
+
+            if p.prefs[packed_key_id] then
+                if p.prefs[packed_key_id]:len() > 1 then
+                    local helpers, err = get_helpers(profile_id_to_int(p.id), p.prefs[packed_key_id])
+
+                    if helpers then
+                        if helpers[helper_number] then
+                            print("user_id: ", profile_id_to_int(p.id), " id: ", helper_key_id, " val: ", helper_number, " ", helpers[helper_number]['state'], " ", helpers[helper_number]['time'], " ", helpers[helper_number]['show'], " ", helpers[helper_number]['close'], " ", p.prefs[packed_email_key_id])
+                        end
+                    else
+                        print("user_id: ", profile_id_to_int(p.id), " id: ", helper_key_id, " val: BAD (", err, ")")
+                    end
+                end
+            end
+        end,
+        helper_number
+    )
+
+end
+
