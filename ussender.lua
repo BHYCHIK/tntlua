@@ -17,7 +17,7 @@ function ussender_add(user_id, sender_id)
     local selected = { box.select_limit(space_no, 0, 0, 1, user_id) }
 
     if #selected == 0 then
-        box.insert(0, user_id, sender_id)
+        box.insert(space_no, user_id, sender_id)
     else
 
         if #selected[1] >= tuple_length_limit then
