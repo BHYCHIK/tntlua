@@ -3,31 +3,76 @@
 -- Field 2 -- key/value dict. Key is always a number.
 
 box.cfg{listen = 3301}
-box.once('init', function()
-	profile_space = box.schema.space.create('profile', {id = 1})
-	profile_space:create_index('primary', {
-		type = 'tree',
-		parts = {1, 'unsigned'},
-		unique = true
-		})
-	box.schema.user.grant('guest', 'read,write,execute', 'universe')
-	end)
+
+-- Create a user, then init storage, create functions and then revoke ALL priveleges from user
+local function init_storage(init_func, interface)
+    local init_username = "profile"
+    box.schema.user.create(init_username, {if_not_exists = true})
+    box.schema.user.grant(init_username, 'execute,read,write', 'universe', nil,
+            {if_not_exists = true})
+    box.session.su(init_username)
+
+    init_func()
+
+    for _, v in pairs(interface) do
+        box.schema.func.create(v, {setuid = true, if_not_exists = true})
+    end
+
+    box.session.su('admin')
+    box.schema.user.revoke(init_username, 'execute,read,write', 'universe')
+end
+
+-- Create a role, which can execute interface functions
+local function init_role(role_name, interface)
+    box.schema.role.create(role_name, {if_not_exists = true})
+    for _, v in pairs(interface) do
+        box.schema.role.grant(role_name, 'execute', 'function', v,
+                {if_not_exists = true})
+    end
+end
+
+-- Scheme initialization
+local function init()
+    local s = box.schema.create_space('profile', {
+        id = 0,
+        if_not_exists = true,
+    })
+    s:create_index('primary', {
+        id = 0,
+        type = 'tree',
+	unique = true,
+        parts = {1, 'unsigned'},
+        if_not_exists = true,
+    })
+end
+
+-- List of functions, which is possible to call from outside the box
+local interface = {
+    'profile_delete',
+    'profile_get_all',
+    'profile_multiget',
+    'profile_multiset',
+    'profile_set',
+}
 
 msgpack = require('msgpack')
 
 -- Cast internal profile format to the format, requested by client-side.
 local function cast_profile_to_return_format(profile)
-	setmetatable(profile.data, msgpack.map_mt) -- If we doesnt call this, we will receive an array with many nulls, not map.
+	setmetatable(profile.data, msgpack.map_mt)
 	return {profile.uid, profile.data}
 end
 
 local function store_profile(profile)
+	local count = 0
+	for k,v in pairs(profile.data) do count = count + 1 end
+
 	-- We dont want to store empty profiles. Save space.
-	if #profile.data == 0 then
+	if count == 0 then
 		return box.space.profile:delete(profile.uid)
 	end
 
-	setmetatable(profile.data, msgpack.map_mt) -- If we doesnt call this, we will store an array with many nulls, not map.
+	setmetatable(profile.data, msgpack.map_mt)
 	return box.space.profile:replace({profile.uid, profile.data})
 end
 
@@ -71,19 +116,18 @@ end
 
 -- function profile_multiget returns only requested keys from profile. Accepts user_id and then several keys
 function profile_multiget(user_id, ...)
-	-- First of all, make hash of needed keys
 	local pref_list = {...}
-	local pref_hash = {}
-	for k, v in ipairs(pref_list) do
-		pref_hash[v] = true
+	if #pref_list == 0 then
+		return cast_profile_to_return_format(create_new_profile(user_id))
 	end
 
 	local profile = load_profile(user_id)
+
 	-- Create a copy of profile. We select few keys, so it is faster to copy only needed keys, then clear not needed keys
 	local profile_copy = create_new_profile(profile.uid)
-	for k, v in pairs(profile.data) do
-		if pref_hash[k] then
-			profile_copy.data[k] = v
+	for _, v in ipairs(pref_list) do
+		if profile.data[v] then
+			profile_copy.data[v] = profile.data[v]
 		end
 	end
 
@@ -122,3 +166,6 @@ end
 function profile_set(user_id, key, value)
 	return profile_multiset(user_id, key, value)
 end
+
+init_storage(init, interface)
+init_role('profile_role', interface)
