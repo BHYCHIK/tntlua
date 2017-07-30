@@ -2,11 +2,13 @@
 -- Field 1 -- user-id
 -- Field 2 -- key/value dict. Key is always a number.
 
-box.cfg{listen = 3301}
+proscribe_host = '10.161.41.111'
+proscribe_port = 27017
+keys_to_proscribe = {324}
 
 -- Create a user, then init storage, create functions and then revoke ALL priveleges from user
 local function init_storage(init_func, interface)
-    local init_username = "profile"
+    local init_username = 'profile'
     box.schema.user.create(init_username, {if_not_exists = true})
     box.schema.user.grant(init_username, 'execute,read,write', 'universe', nil,
             {if_not_exists = true})
@@ -34,11 +36,9 @@ end
 -- Scheme initialization
 local function init()
     local s = box.schema.create_space('profile', {
-        id = 0,
         if_not_exists = true,
     })
     s:create_index('primary', {
-        id = 0,
         type = 'tree',
 	unique = true,
         parts = {1, 'unsigned'},
@@ -56,6 +56,41 @@ local interface = {
 }
 
 msgpack = require('msgpack')
+socket = require('socket')
+digest = require('digest')
+pickle = require('pickle')
+
+proscribe_socket = socket('AF_INET', 'SOCK_DGRAM', 'udp')
+
+-- Function, which sends requested profile_key changes to special DWH daemon
+local function send_to_proscribe(uid, profile_key, old_value, new_value)
+	local fit = false
+	for _, v in ipairs(keys_to_proscribe) do
+		if v == profile_key then
+			fit = true
+		end
+	end
+	if not fit then
+		return
+	end
+
+	if not old_value then
+		old_value = ''
+	end
+	if not new_value then
+		new_value = ''
+	end
+	if old_value == new_value then -- we doesnt want to send data without changes
+		return
+	end
+
+	old_value = digest.base64_encode(old_value)
+	new_value = digest.base64_encode(new_value)
+
+	local body = pickle.pack('iliiAiA', 1, uid, profile_key, #old_value, old_value, #new_value, new_value)
+	local packet = pickle.pack('iiiA', 1, #body, 0, body)
+	proscribe_socket:sendto(proscribe_host, proscribe_port, packet)
+end
 
 -- Cast internal profile format to the format, requested by client-side.
 local function cast_profile_to_return_format(profile)
@@ -153,6 +188,7 @@ function profile_multiset(user_id, ...)
     	local i, pref_value = next(pref_list, i)
 	-- iterate all passed key/value pairs from arguments
     	while pref_key ~= nil and pref_value ~= nil do
+		send_to_proscribe(profile.uid, pref_key, profile.data[pref_key], pref_value)
 		set_profile_key(profile, pref_key, pref_value)
 		i, pref_key = next(pref_list, i)
 		i, pref_value = next(pref_list, i)
